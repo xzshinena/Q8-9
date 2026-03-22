@@ -23,7 +23,13 @@
          [`(data ,name ,val ...) (if (hash-has-key? sym-table name)
                                      (error 'duplicate)
                                      (hash-set! sym-table name (list 'data counter)))
-                                 (+ counter (length val))]
+                                 (if (list? (first val)) ;; handles statements of the form (data sym (nat sym-or-val))
+                                     (+ counter (first (first val)))
+                                     (+ counter (length val)))]
+         [`(label ,name) (if (hash-has-key? sym-table name)
+                             (error 'duplicate)
+                             (hash-set! sym-table name (list 'label counter)))
+                         counter]
          [_ (add1 counter)]))
      (first-pass (rest prog-list) sym-table new-counter)]))
 
@@ -59,19 +65,34 @@
 (define (convert sym-table inst)
   (match inst
     [`(const ,name ,val) empty]
-    [`(data ,name ,val ...) (map (lambda (v) (convert-opd sym-table v)) val)]
-    [`(add ,dest ,opd1 ,opd2) (list (list 'add (convert-dest sym-table dest)
-                                         (convert-opd sym-table opd1)
-                                         (convert-opd sym-table opd2)))]
+    [`(data ,name ,val ...) (if (list? (first val))
+                                (for/list ([i (range (first (first val)))]) (convert-opd sym-table (second (first val)) #t))
+                                (map (lambda (v) (convert-opd sym-table v #t)) val))]
+    [`(label ,name) empty]
+    [`(,op ,dest ,opd1 ,opd2) (list (list op (convert-dest sym-table dest)
+                                             (convert-opd sym-table opd1)
+                                             (convert-opd sym-table opd2)))]
+    [`(lnot ,dest ,opd) (list (list 'lnot (convert-dest sym-table dest)
+                                          (convert-opd sym-table opd)))]
+    [`(jump ,opd) (list (list 'jump (convert-opd sym-table opd)))]
+    [`(branch ,opd1 ,opd2) (list (list 'branch (convert-opd sym-table opd1)
+                                               (convert-opd sym-table opd2)))]
+    [`(move ,dest ,opd) (list (list 'move (convert-dest sym-table dest)
+                                          (convert-opd sym-table opd)))]
+    [`(print-val ,opd) (list (list 'print-val (convert-opd sym-table opd)))]
+    [`(print-string ,str) (list (list 'print-string str))]
     [`(halt) (list 0)]))
 
-(define (convert-opd sym-table opd)
+;; include optional data-as-imm? param to account for the case where a psymbol defined in a data statement
+;; is used as an immediate operand in another data statement
+(define (convert-opd sym-table opd (data-as-imm? #f))
   (cond
     [(symbol? opd)
      (define resolved (hash-ref sym-table opd))
      (match resolved
        [`(const ,n) n]
-       [`(data ,n) (list n)])]
+       [`(data ,n) (if data-as-imm? n (list n))]
+       [`(label ,n) n])]
     [else opd]))
 
 (define (convert-dest sym-table dest)
@@ -82,6 +103,9 @@
        [`(data ,n) (list n)]
        [_ (error 'bad)])]
     [else dest]))
+
+;; (data X 1)
+;; (data Y X)
 
 ;; (const A B)
 ;; (const B 10)
