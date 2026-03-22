@@ -17,13 +17,13 @@
      (define new-counter
        (match inst
          [`(const ,name ,val) (if (hash-has-key? sym-table name)
-                                (error 'duplicate)
-                                (hash-set! sym-table name (list 'const val)))
+                                  (error 'duplicate)
+                                  (hash-set! sym-table name (list 'const val)))
                               counter]
-         [`(data ,name ,val) (if (hash-has-key? sym-table name)
-                               (error 'duplicate)
-                               (hash-set! sym-table name (list 'data counter)))
-                             (add1 counter)]
+         [`(data ,name ,val ...) (if (hash-has-key? sym-table name)
+                                     (error 'duplicate)
+                                     (hash-set! sym-table name (list 'data counter)))
+                                 (+ counter (length val))]
          [_ (add1 counter)]))
      (first-pass (rest prog-list) sym-table new-counter)]))
 
@@ -31,8 +31,8 @@
   (for ([(key value) (in-hash sym-table)])
     (hash-set! sym-table key (find-val sym-table key))))
 
-(define (find-val sym-table key (visiting (set))) ;; default value of visiting is the empty set
-  (when (set-member? visiting key) ;; use 'when' instead of 'if' because 'if' requires you to specify an else case
+(define (find-val sym-table key (existing (set))) ;; default value of existing is the empty set
+  (when (set-member? existing key) ;; use 'when' instead of 'if' because 'if' requires you to specify an else case
     (error 'circular)) 
   (define val (hash-ref sym-table key #f))
   (cond
@@ -40,10 +40,10 @@
     [else
      (match val
        [`(const ,(? symbol? s))
-         (define resolved (find-val sym-table s (set-add visiting key)))
+         (define resolved (find-val sym-table s (set-add existing key)))
          (list 'const (if (list? resolved) (second resolved) resolved))]
        [`(data ,(? symbol? s))
-         (define resolved (find-val sym-table s (set-add visiting key)))
+         (define resolved (find-val sym-table s (set-add existing key)))
          (list 'data (if (list? resolved) (second resolved) resolved))]
        [_ val])]))
 
@@ -53,18 +53,17 @@
     [else
      (define inst (first prog-list))
      (define inst-result (convert sym-table inst))
-     (second-pass (rest prog-list) sym-table (if (empty? inst-result)
-                                                 result
-                                                 (cons inst-result result)))]))
+     (second-pass (rest prog-list) sym-table (foldl cons result inst-result))]))
 
+;; wrap each result in a list to ensure compatability with foldl
 (define (convert sym-table inst)
   (match inst
     [`(const ,name ,val) empty]
-    [`(data ,name ,val) val]
-    [`(add ,dest ,opd1 ,opd2) (list 'add (convert-dest sym-table dest)
+    [`(data ,name ,val ...) (map (lambda (v) (convert-opd sym-table v)) val)]
+    [`(add ,dest ,opd1 ,opd2) (list (list 'add (convert-dest sym-table dest)
                                          (convert-opd sym-table opd1)
-                                         (convert-opd sym-table opd2))]
-    [`(halt) 0]))
+                                         (convert-opd sym-table opd2)))]
+    [`(halt) (list 0)]))
 
 (define (convert-opd sym-table opd)
   (cond
@@ -73,7 +72,6 @@
      (match resolved
        [`(const ,n) n]
        [`(data ,n) (list n)])]
-    [(list? opd) opd]
     [else opd]))
 
 (define (convert-dest sym-table dest)
@@ -83,8 +81,15 @@
      (match resolved
        [`(data ,n) (list n)]
        [_ (error 'bad)])]
-    [(list? dest) dest]
     [else dest]))
+
+;; (const A B)
+;; (const B 10)
+;; (add Y Y A)
+;; (data Y 20 B)
+;; produces '((add (1) (1) 10)
+;;            20
+;;            10)
 
 ;; (const A B)
 ;; (const B 10)
