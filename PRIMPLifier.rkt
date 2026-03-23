@@ -74,9 +74,9 @@
                                              (convert-opd sym-table opd2)))]
     [`(lnot ,dest ,opd) (list (list 'lnot (convert-dest sym-table dest)
                                           (convert-opd sym-table opd)))]
-    [`(jump ,opd) (list (list 'jump (convert-opd sym-table opd)))]
-    [`(branch ,opd1 ,opd2) (list (list 'branch (convert-opd sym-table opd1)
-                                               (convert-opd sym-table opd2)))]
+    [`(jump ,opd) (list (list 'jump (convert-opd sym-table opd #f #t)))]
+    [`(branch ,opd1 ,opd2) (list (list 'branch (convert-opd sym-table opd1 #f #f)
+                                               (convert-opd sym-table opd2 #f #t)))]
     [`(move ,dest ,opd) (list (list 'move (convert-dest sym-table dest)
                                           (convert-opd sym-table opd)))]
     [`(print-val ,opd) (list (list 'print-val (convert-opd sym-table opd)))]
@@ -85,14 +85,21 @@
 
 ;; include optional data-as-imm? param to account for the case where a psymbol defined in a data statement
 ;; is used as an immediate operand in another data statement
-(define (convert-opd sym-table opd (data-as-imm? #f))
+(define (convert-opd sym-table opd (data-as-imm? #f) (label-ok? #f))
   (cond
     [(symbol? opd)
      (define resolved (hash-ref sym-table opd))
      (match resolved
        [`(const ,n) n]
        [`(data ,n) (if data-as-imm? n (list n))]
-       [`(label ,n) n])]
+       [`(label ,n) (if label-ok? n (error 'primplify "incorrect use of label: ~a" opd))])]
+    [(and (list? opd) (= (length opd) 2) (symbol? (first opd)))
+     ; indexed case like (A (5)) where A is a data psymbol used as immediate
+     (define resolved (hash-ref sym-table (first opd)))
+     (match resolved
+       [`(data ,n) (list n (second opd))]
+       [`(const ,n) (list n (second opd))]
+       [_ (error 'primplify "incorrect psymbol in indexed position")])]
     [else opd]))
 
 (define (convert-dest sym-table dest)
@@ -101,7 +108,7 @@
      (define resolved (hash-ref sym-table dest))
      (match resolved
        [`(data ,n) (list n)]
-       [_ (error 'bad)])]
+       [_ (error 'incorrect)])]
     [else dest]))
 
 ;; (data X 1)
