@@ -17,11 +17,11 @@
      (define new-counter
        (match inst
          [`(const ,name ,val) (if (hash-has-key? sym-table name)
-                                  (error 'duplicate)
+                                  (error 'primplify "duplicate")
                                   (hash-set! sym-table name (list 'const val)))
                               counter]
          [`(data ,name ,val ...) (if (hash-has-key? sym-table name)
-                                     (error 'duplicate)
+                                     (error 'primplify "duplicate")
                                      (hash-set! sym-table name (list 'data counter)))
                                  (if (list? (first val)) ;; handles statements of the form (data sym (nat sym-or-val))
                                      (+ counter (first (first val)))
@@ -39,10 +39,10 @@
 
 (define (find-val sym-table key (existing (set))) ;; default value of existing is the empty set
   (when (set-member? existing key) ;; use 'when' instead of 'if' because 'if' requires you to specify an else case
-    (error 'circular)) 
+    (error 'primplify "circular")) 
   (define val (hash-ref sym-table key #f))
   (cond
-    [(not val) (error 'undefined)]
+    [(not val) (error 'primplify "undefined")]
     [else
      (match val
        [`(const ,(? symbol? s))
@@ -81,25 +81,36 @@
                                           (convert-opd sym-table opd)))]
     [`(print-val ,opd) (list (list 'print-val (convert-opd sym-table opd)))]
     [`(print-string ,str) (list (list 'print-string str))]
-    [`(halt) (list 0)]))
+    [`(halt) (list 0)]
+    [(? integer? v) (list v)]
+    [(? boolean? v) (list v)]
+    [(? symbol? v) (define val (hash-ref sym-table v #f))
+                   (if val (list (second val)) (error 'primplify "undefined"))]))
 
 ;; include optional data-as-imm? param to account for the case where a psymbol defined in a data statement
 ;; is used as an immediate operand in another data statement
 (define (convert-opd sym-table opd (data-as-imm? #f) (label-ok? #f))
   (cond
     [(symbol? opd)
-     (define resolved (hash-ref sym-table opd))
+     (define resolved (hash-ref sym-table opd #f))
+     (when (not resolved) (error 'primplify "undefined symbol ~a" opd))
      (match resolved
        [`(const ,n) n]
        [`(data ,n) (if data-as-imm? n (list n))]
-       [`(label ,n) (if label-ok? n (error 'primplify "incorrect use of label: ~a" opd))])]
+       [`(label ,n) (if (or label-ok? data-as-imm?) n (error 'primplify "incorrect use of label: ~a" opd))])]
     [(and (list? opd) (= (length opd) 2) (symbol? (first opd)))
-     ; indexed case like (A (5)) where A is a data psymbol used as immediate
+     ;; indexed case like (A (5)) where A is a data psymbol used as immediate
      (define resolved (hash-ref sym-table (first opd)))
      (match resolved
        [`(data ,n) (list n (second opd))]
        [`(const ,n) (list n (second opd))]
        [_ (error 'primplify "incorrect psymbol in indexed position")])]
+    ;; list operand contains symbol
+    [(and (list? opd) (= (length opd) 1) (symbol? (first opd)))
+     (define resolved (hash-ref sym-table (first opd)))
+     (match resolved
+       [`(data ,n) (list n)]
+       [_ (error 'primplify "incorrect psymbol in indirect position")])]
     [else opd]))
 
 (define (convert-dest sym-table dest)
@@ -108,7 +119,12 @@
      (define resolved (hash-ref sym-table dest))
      (match resolved
        [`(data ,n) (list n)]
-       [_ (error 'incorrect)])]
+       [_ (error 'primplify "incorrect")])] ;; handles case where const occurs as a dest
+    [(and (list? dest) (= (length dest) 1) (symbol? (first dest)))
+     (define resolved (hash-ref sym-table (first dest)))
+     (match resolved
+       [`(data ,n) (list n)]
+       [_ (error 'primplify "incorrect psymbol in indirect dest position")])]
     [else dest]))
 
 ;; (data X 1)
